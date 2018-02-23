@@ -3,6 +3,7 @@
 -export([ process_request/2
         , parse_map_to_atom_keys/0
         , read_required_params/1
+        , read_optional_params/1
         , base58_decode/1
         , hexstrings_decode/1
         , ttl_decode/1
@@ -15,6 +16,10 @@
         , verify_oracle_query_existence/2
         , verify_name/1
         , compute_contract_call_data/0
+        ]).
+
+-export([ get_transaction/2
+        , encode_transaction/2
         ]).
 
 -export([ ok_response/1
@@ -45,6 +50,20 @@ read_required_params(ParamNames) ->
                 undefined -> error;
                 Val -> {ok, Val}
             end
+        end,
+        "Not found").
+
+read_optional_params(Params) ->
+    params_read_fun(Params,
+        fun({Name, DefaultValue}, Req, _) ->
+            Val =
+                %% swagger puts an 'undefined' value for missing not reqired
+                %% params
+                case maps:get(Name, Req) of
+                    undefined -> DefaultValue;
+                    V -> V
+                end,
+            {ok, Val}
         end,
         "Not found").
 
@@ -288,3 +307,34 @@ compute_contract_call_data() ->
                 {error, {400, [], #{<<"reason">> => Reason}}}
         end
     end.
+
+get_transaction(TxKey, TxStateKey) ->
+    fun(_Req, State) ->
+        TxHash = maps:get(State, TxKey),
+        case aec_db:read_tx(TxHash) of
+            [] ->
+                {error, {404, [], #{<<"reason">> => <<"Transaction not found">>}}};
+            [{Block0, Tx}] ->
+                BlockHash =
+                    case Block0 of
+                        mempool -> mempool;
+                        BH when is_binary(BH) -> BH
+                    end,
+                {ok, maps:put(TxStateKey, #{tx => Tx,
+                                            tx_block_hash => BlockHash},
+                             State)}
+        end
+    end.
+
+encode_transaction(TxKey, TxEncodingKey) ->
+    fun(_Req, State) ->
+        #{tx := Tx,
+          tx_block_hash := BlockHash } = maps:get(State, TxKey),
+        TxEncoding = maps:get(State, TxEncodingKey),
+        T =
+            case BlockHash of
+                mempool ->
+                _ when is_binary(BlockHash) -> 
+                    aetx_sign:serialize_for_client(TxEncoding, H, Tx),
+    end.
+
